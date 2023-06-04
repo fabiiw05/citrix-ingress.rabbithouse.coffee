@@ -1,0 +1,87 @@
+---
+- name: Create a system user account for the NetScaler
+  hosts: all
+  connection: local
+  gather_facts: no
+  module_defaults:
+    netscaler_nitro_request:
+      nitro_protocol: "http"
+      nitro_user: "{{ adc_user }}"
+      nitro_pass: "{{ adc_pass }}"
+      nsip:       "{{ adc_ip }}"
+
+  collections:
+    - citrix.adc
+
+  tasks:
+    - name: Get policy
+      failed_when:
+        - user_result.http_response_data.status != 200
+        - user_result.http_response_data.status != 404
+
+      delegate_to: localhost
+      register: user_result
+      netscaler_nitro_request:
+       operation: get
+       resource: systemuser
+       name: "{{ citrix_cic.username }}"
+
+    - name: "Create a System user"
+      when: user_result.http_response_data.status == 404
+      delegate_to: localhost
+      citrix_adc_nitro_request:
+       operation: add
+       resource: systemuser
+       name: ''
+       attributes:
+         username: "{{ citrix_cic.username }}"
+         password: "{{ citrix_cic.password }}"
+
+    - name: Get policy
+      failed_when:
+        - user_result.http_response_data.status != 200
+        - user_result.http_response_data.status != 404
+      delegate_to: localhost
+      register: policy_result
+      netscaler_nitro_request:
+       operation: get
+       resource: systemcmdpolicy
+       name: "cic-policy"
+
+    - name: "Create a policy"
+      delegate_to: localhost
+      when: policy_result.http_response_data.status == 404
+      citrix_adc_nitro_request:
+       operation: add
+       resource: systemcmdpolicy
+       name: ''
+       attributes:
+         policyname: "cic-policy"
+         action: "ALLOW"
+         cmdspec: '^(\?!shell)(\?!sftp)(\?!scp)(\?!batch)(\?!source)(\?!.*superuser)(\?!.*nsroot)(\?!install)(\?!show\s+system\s+(user|cmdPolicy|file))(\?!(set|add|rm|create|export|kill)\s+system)(\?!(unbind|bind)\s+system\s+(user|group))(\?!diff\s+ns\s+config)(\?!(set|unset|add|rm|bind|unbind|switch)\s+ns\s+partition).*|(^install\s*(wi|wf))|(^\S+\s+system\s+file)^(\?!shell)(\?!sftp)(\?!scp)(\?!batch)(\?!source)(\?!.*superuser)(\?!.*nsroot)(\?!install)(\?!show\s+system\s+(user|cmdPolicy|file))(\?!(set|add|rm|create|export|kill)\s+system)(\?!(unbind|bind)\s+system\s+(user|group))(\?!diff\s+ns\s+config)(\?!(set|unset|add|rm|bind|unbind|switch)\s+ns\s+partition).*|(^install\s*(wi|wf))|(^\S+\s+system\s+file)'
+
+    - name: get systemcmdpolicy_binding
+      delegate_to: localhost
+      register: systemcmdpolicy_binding_result
+      netscaler_nitro_request:
+       operation: get
+       resource: systemuser_systemcmdpolicy_binding
+       name: "cic"
+
+    - name: set_fact
+      ansible.builtin.set_fact:
+        policy_exists: true
+      loop: "{{ systemcmdpolicy_binding_result.nitro_object }}"
+      when: "'cic-policy' in item.policyname"
+ 
+    - name: systemcmdpolicy_binding
+      delegate_to: localhost
+      when: policy_exists is not defined 
+      netscaler_nitro_request:
+       operation: add
+       resource: systemuser_systemcmdpolicy_binding
+       name: ''
+       attributes:
+         username: "cic"
+         policyname: "cic-policy"
+         priority: 1
